@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # coding: utf-8
-# Copyright 2016 Abram Hindle, https://github.com/tywtyw2002, and https://github.com/treedust
+# Copyright 2016 Abram Hindle, https://github.com/tywtyw2002,
+# https://github.com/treedust, and ZiQing Ma
 # 
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,9 +21,13 @@
 
 import sys
 import socket
-import re
 # you may use urllib to encode data appropriately
-import urllib.parse
+from urllib.parse import urlparse
+
+DEFAULT_PORT = 80
+CRLF = "\r\n"
+LF = "\n"
+
 
 def help():
     print("httpclient.py [GET/POST] [URL]\n")
@@ -33,21 +38,56 @@ class HTTPResponse(object):
         self.body = body
 
 class HTTPClient(object):
-    #def get_host_port(self,url):
+    def get_host(self, url):
+        return urlparse(url).hostname
+
+    def get_host_port(self,url):
+        port = urlparse(url).port
+        if port == None:
+            port = DEFAULT_PORT
+        return port
+
+    def get_path(self, url):
+        path = urlparse(url).path
+        if path == "":
+            path += "/"
+        return path
 
     def connect(self, host, port):
         self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.socket.connect((host, port))
         return None
 
+    """
+    Ricky Wilson - https://stackoverflow.com/a/23050458
+    get_code(), get_headers(), and get_body() were based on
+    Ricky's solution, hence it looks a bit convoluted
+    """
     def get_code(self, data):
-        return None
+        request_line = data.split(LF)[0]
+        code = int(request_line.split()[1])
+        return code
 
-    def get_headers(self,data):
-        return None
+    def get_headers(self, data):
+        headers = data.split(CRLF, 1)[0]
+        request_line = headers.split(LF)[0]
+        headers.replace(request_line, "")
+        return headers
 
     def get_body(self, data):
-        return None
+        headers = self.get_headers(data)
+        request_line = headers.split(LF)[0]
+        body = data.replace(headers, "")
+        body.replace(request_line, "")
+        return body
+
+    def parse_args(self, params):
+        if params:
+            # CryptoFool - https://stackoverflow.com/a/64829960
+            data = "&".join([k if v is None else f"{k}={v}" for k, v in params.items()])
+        else:
+            data = ""
+        return data
     
     def sendall(self, data):
         self.socket.sendall(data.encode('utf-8'))
@@ -67,14 +107,39 @@ class HTTPClient(object):
                 done = not part
         return buffer.decode('utf-8')
 
+    def transceive(self, host, port, message):
+        self.connect(host, port)
+        self.sendall(message)
+        data = self.recvall(self.socket)
+        self.close()
+        return data
+
     def GET(self, url, args=None):
-        code = 500
-        body = ""
+        host = self.get_host(url)
+        port = self.get_host_port(url)
+        path = self.get_path(url)
+        message = "GET %s HTTP/1.1%s" % (path, CRLF)
+        message += "Host: %s" % (host + CRLF)
+        message += "Connection: close%s" % (CRLF + CRLF)
+        data = self.transceive(host, port, message)
+        code = self.get_code(data)
+        body = self.get_body(data)
         return HTTPResponse(code, body)
 
     def POST(self, url, args=None):
-        code = 500
-        body = ""
+        host = self.get_host(url)
+        port = self.get_host_port(url)
+        path = self.get_path(url)
+        params = self.parse_args(args)
+        message = "POST %s HTTP/1.1%s" % (path, CRLF)
+        message += "Host: %s" % (host + CRLF)
+        message += "Connection: close%s" % (CRLF)
+        message += "Content-Type: application/x-www-form-urlencoded%s" % (CRLF)
+        message += "Content-Length: %d%s" % (len(params), CRLF + CRLF)
+        message += params
+        data = self.transceive(host, port, message)
+        code = self.get_code(data)
+        body = self.get_body(data)
         return HTTPResponse(code, body)
 
     def command(self, url, command="GET", args=None):
